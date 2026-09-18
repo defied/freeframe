@@ -437,7 +437,7 @@ spec:
         - name: ghcr-pull-secret
       containers:
         - name: api
-          image: ghcr.io/defied/freeframe-api:latest
+          image: ghcr.io/defied/freeframe-api:e4631c6d3758
           imagePullPolicy: Always
           command:
             - sh
@@ -519,7 +519,7 @@ spec:
         - name: ghcr-pull-secret
       containers:
         - name: worker
-          image: ghcr.io/defied/freeframe-api:latest
+          image: ghcr.io/defied/freeframe-api:e4631c6d3758
           imagePullPolicy: Always
           command:
             - sh
@@ -561,7 +561,7 @@ spec:
         - name: ghcr-pull-secret
       containers:
         - name: email-worker
-          image: ghcr.io/defied/freeframe-api:latest
+          image: ghcr.io/defied/freeframe-api:e4631c6d3758
           imagePullPolicy: Always
           command:
             - sh
@@ -603,7 +603,7 @@ spec:
         - name: ghcr-pull-secret
       containers:
         - name: maintenance-worker
-          image: ghcr.io/defied/freeframe-api:latest
+          image: ghcr.io/defied/freeframe-api:e4631c6d3758
           imagePullPolicy: Always
           command:
             - sh
@@ -645,7 +645,7 @@ spec:
         - name: ghcr-pull-secret
       containers:
         - name: beat
-          image: ghcr.io/defied/freeframe-api:latest
+          image: ghcr.io/defied/freeframe-api:e4631c6d3758
           imagePullPolicy: Always
           command:
             - sh
@@ -687,7 +687,7 @@ spec:
         - name: ghcr-pull-secret
       containers:
         - name: web
-          image: ghcr.io/defied/freeframe-web:latest
+          image: ghcr.io/defied/freeframe-web:e4631c6d3758
           imagePullPolicy: Always
           envFrom:
             - configMapRef:
