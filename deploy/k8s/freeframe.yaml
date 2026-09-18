@@ -117,11 +117,11 @@ data:
   S3_BUCKET: "freeframe"
   S3_REGION: "us-east-1"
   S3_ENDPOINT: "http://freeframe-minio:9000"
-  S3_PUBLIC_ENDPOINT: "https://storage.ff.chubbyoctopus.studio"
+  S3_PUBLIC_ENDPOINT: "https://storage.ff.chubbyoctopus.film"
   JWT_ALGORITHM: "HS256"
   ACCESS_TOKEN_EXPIRE_MINUTES: "15"
   REFRESH_TOKEN_EXPIRE_DAYS: "7"
-  FRONTEND_URL: "https://ff.chubbyoctopus.studio"
+  FRONTEND_URL: "https://ff.chubbyoctopus.film"
   CORS_ALLOW_ORIGINS: ""
   API_INTERNAL_URL: "http://freeframe-api:8000"
   API_WORKERS: "4"
@@ -137,11 +137,11 @@ data:
   ORPHAN_SWEEP_GRACE_HOURS: "0"
   ORPHAN_SWEEP_DELETE: "false"
   MAIL_PROVIDER: "smtp"
-  MAIL_FROM_ADDRESS: "noreply@chubbyoctopus.studio"
+  MAIL_FROM_ADDRESS: "noreply@chubbyoctopus.film"
   SMTP_HOST: "smtp.example.com"
   SMTP_PORT: "587"
   SMTP_USE_TLS: "true"
-  MINIO_CORS_ALLOW_ORIGIN: "https://ff.chubbyoctopus.studio"
+  MINIO_CORS_ALLOW_ORIGIN: "https://ff.chubbyoctopus.film"
 ---
 # ─── Postgres ─────────────────────────────────────────────────────────────
 apiVersion: apps/v1
@@ -752,10 +752,10 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts:
-        - ff.chubbyoctopus.studio
+        - ff.chubbyoctopus.film
       secretName: freeframe-tls
   rules:
-    - host: ff.chubbyoctopus.studio
+    - host: ff.chubbyoctopus.film
       http:
         paths:
           - path: /api(/|$)(.*)
@@ -794,10 +794,10 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts:
-        - storage.ff.chubbyoctopus.studio
+        - storage.ff.chubbyoctopus.film
       secretName: freeframe-storage-tls
   rules:
-    - host: storage.ff.chubbyoctopus.studio
+    - host: storage.ff.chubbyoctopus.film
       http:
         paths:
           - path: /
