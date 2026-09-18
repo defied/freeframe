@@ -1,0 +1,809 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: freeframe
+---
+# ─── Persistent storage ──────────────────────────────────────────────────────
+# Single-node cluster (node "tynan" == 192.168.0.8), so hostPath PVs are pinned
+# to real host directories rather than a network share.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: freeframe-media-pv
+  labels:
+    type: local
+spec:
+  storageClassName: manual
+  capacity:
+    storage: 300Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: /home/Media/freeframe
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: freeframe-media
+  namespace: freeframe
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  storageClassName: manual
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 300Gi
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: freeframe-postgres-pv
+  labels:
+    type: local
+spec:
+  storageClassName: manual
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: /home/service-configs/freeframe/postgres
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: freeframe-postgres
+  namespace: freeframe
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  storageClassName: manual
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: freeframe-redis-pv
+  labels:
+    type: local
+spec:
+  storageClassName: manual
+  capacity:
+    storage: 2Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: /home/service-configs/freeframe/redis
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: freeframe-redis
+  namespace: freeframe
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  storageClassName: manual
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+---
+# ─── Non-secret configuration ────────────────────────────────────────────────
+# DATABASE_URL, REDIS_URL, JWT_SECRET, S3_ACCESS_KEY/SECRET_KEY, MINIO_ROOT_*
+# and SMTP_USER/PASSWORD live in the `freeframe-secret` Secret, applied
+# out-of-band (kubectl) rather than committed here.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: freeframe-config
+  namespace: freeframe
+data:
+  S3_STORAGE: "minio"
+  S3_BUCKET: "freeframe"
+  S3_REGION: "us-east-1"
+  S3_ENDPOINT: "http://freeframe-minio:9000"
+  S3_PUBLIC_ENDPOINT: "https://storage.ff.chubbyoctopus.studio"
+  JWT_ALGORITHM: "HS256"
+  ACCESS_TOKEN_EXPIRE_MINUTES: "15"
+  REFRESH_TOKEN_EXPIRE_DAYS: "7"
+  FRONTEND_URL: "https://ff.chubbyoctopus.studio"
+  CORS_ALLOW_ORIGINS: ""
+  API_INTERNAL_URL: "http://freeframe-api:8000"
+  API_WORKERS: "4"
+  TRANSCODING_CONCURRENCY: "2"
+  EMAIL_CONCURRENCY: "2"
+  MAINTENANCE_CONCURRENCY: "1"
+  TRANSCODER_ENGINE: "ffmpeg"
+  TRANSCODER_QUALITIES: "1080p,720p,360p"
+  MAX_UPLOAD_BYTES: "0"
+  STALE_UPLOAD_TIMEOUT_HOURS: "24"
+  STUCK_PROCESSING_TIMEOUT_HOURS: "6"
+  SOFT_DELETE_RETENTION_DAYS: "30"
+  ORPHAN_SWEEP_GRACE_HOURS: "0"
+  ORPHAN_SWEEP_DELETE: "false"
+  MAIL_PROVIDER: "smtp"
+  MAIL_FROM_ADDRESS: "noreply@chubbyoctopus.studio"
+  SMTP_HOST: "smtp.example.com"
+  SMTP_PORT: "587"
+  SMTP_USE_TLS: "true"
+  MINIO_CORS_ALLOW_ORIGIN: "https://ff.chubbyoctopus.studio"
+---
+# ─── Postgres ─────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: freeframe-postgres
+  namespace: freeframe
+  labels:
+    app.kubernetes.io/name: freeframe-postgres
+    app.kubernetes.io/part-of: freeframe
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: freeframe-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: freeframe-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          envFrom:
+            - secretRef:
+                name: freeframe-secret
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U ${POSTGRES_USER:-freeframe}"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U ${POSTGRES_USER:-freeframe}"]
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: freeframe-postgres
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: freeframe-postgres
+  namespace: freeframe
+  labels:
+    app.kubernetes.io/name: freeframe-postgres
+    app.kubernetes.io/part-of: freeframe
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5432
+      targetPort: 5432
+  selector:
+    app.kubernetes.io/name: freeframe-postgres
+---
+# ─── Redis ────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: freeframe-redis
+  namespace: freeframe
+  labels:
+    app.kubernetes.io/name: freeframe-redis
+    app.kubernetes.io/part-of: freeframe
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: freeframe-redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: freeframe-redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          command:
+            - sh
+            - -c
+            - >
+              redis-server --requirepass "$REDIS_PASSWORD" --appendonly yes
+          envFrom:
+            - secretRef:
+                name: freeframe-secret
+          ports:
+            - containerPort: 6379
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" --no-auth-warning ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" --no-auth-warning ping"]
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: freeframe-redis
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: freeframe-redis
+  namespace: freeframe
+  labels:
+    app.kubernetes.io/name: freeframe-redis
+    app.kubernetes.io/part-of: freeframe
+spec:
+  type: ClusterIP
+  ports:
+    - port: 6379
+      targetPort: 6379
+  selector:
+    app.kubernetes.io/name: freeframe-redis
+---
+# ─── MinIO (S3-compatible object storage; FreeFrame speaks only the S3 API) ──
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: freeframe-minio
+  namespace: freeframe
+  labels:
+    app.kubernetes.io/name: freeframe-minio
+    app.kubernetes.io/part-of: freeframe
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: freeframe-minio
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: freeframe-minio
+    spec:
+      containers:
+        - name: minio
+          image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+          args: ["server", "/data", "--console-address", ":9001"]
+          env:
+            - name: MINIO_CORS_ALLOW_METHODS
+              value: "GET,PUT,POST,DELETE,HEAD"
+            - name: MINIO_CORS_ALLOW_HEADERS
+              value: "*"
+            - name: MINIO_CORS_EXPOSE_HEADERS
+              value: "ETag,Content-Length,x-amz-request-id"
+          envFrom:
+            - configMapRef:
+                name: freeframe-config
+            - secretRef:
+                name: freeframe-secret
+          ports:
+            - containerPort: 9000
+              name: api
+            - containerPort: 9001
+              name: console
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: 9000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: 9000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: freeframe-media
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: freeframe-minio
+  namespace: freeframe
+  labels:
+    app.kubernetes.io/name: freeframe-minio
+    app.kubernetes.io/part-of: freeframe
+spec:
+  type: ClusterIP
+  ports:
+    - name: api
+      port: 9000
+      targetPort: 9000
+    - name: console
+      port: 9001
+      targetPort: 9001
+  selector:
+    app.kubernetes.io/name: freeframe-minio
+---
+# One-shot: create the bucket (idempotent). Re-runs on every ArgoCD sync but
+# mc mb --ignore-existing makes that harmless; ArgoCD deletes the Job once it
+# succeeds so it doesn't pile up completed Jobs.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: freeframe-minio-init
+  namespace: freeframe
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: mc
+          image: minio/mc:latest
+          envFrom:
+            - configMapRef:
+                name: freeframe-config
+            - secretRef:
+                name: freeframe-secret
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              until mc alias set local "$S3_ENDPOINT" "$S3_ACCESS_KEY" "$S3_SECRET_KEY"; do
+                echo "waiting for minio..."; sleep 3
+              done
+              mc mb --ignore-existing "local/$S3_BUCKET"
+---
+# ─── API ──────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: freeframe-api
+  namespace: freeframe
+  labels:
+    app.kubernetes.io/name: freeframe-api
+    app.kubernetes.io/part-of: freeframe
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: freeframe-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: freeframe-api
+    spec:
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+      containers:
+        - name: api
+          image: ghcr.io/defied/freeframe-api:latest
+          imagePullPolicy: Always
+          command:
+            - sh
+            - -c
+            - >
+              cd /workspace/apps/api && alembic upgrade head && cd /workspace &&
+              gunicorn apps.api.main:app
+              -w ${API_WORKERS:-4}
+              -k uvicorn.workers.UvicornWorker
+              --bind 0.0.0.0:8000
+              --timeout 120
+              --graceful-timeout 30
+          env:
+            - name: DISABLE_DOCS
+              value: "true"
+          envFrom:
+            - configMapRef:
+                name: freeframe-config
+            - secretRef:
+                name: freeframe-secret
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: freeframe-api
+  namespace: freeframe
+  labels:
+    app.kubernetes.io/name: freeframe-api
+    app.kubernetes.io/part-of: freeframe
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8000
+      targetPort: 8000
+  selector:
+    app.kubernetes.io/name: freeframe-api
+---
+# ─── Celery: transcoding worker ────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: freeframe-worker
+  namespace: freeframe
+  labels:
+    app.kubernetes.io/name: freeframe-worker
+    app.kubernetes.io/part-of: freeframe
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: freeframe-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: freeframe-worker
+    spec:
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+      containers:
+        - name: worker
+          image: ghcr.io/defied/freeframe-api:latest
+          imagePullPolicy: Always
+          command:
+            - sh
+            - -c
+            - "celery -A apps.api.tasks.celery_app worker -Q transcoding -c ${TRANSCODING_CONCURRENCY:-2} --loglevel=warning"
+          envFrom:
+            - configMapRef:
+                name: freeframe-config
+            - secretRef:
+                name: freeframe-secret
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+---
+# ─── Celery: email worker ───────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: freeframe-email-worker
+  namespace: freeframe
+  labels:
+    app.kubernetes.io/name: freeframe-email-worker
+    app.kubernetes.io/part-of: freeframe
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: freeframe-email-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: freeframe-email-worker
+    spec:
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+      containers:
+        - name: email-worker
+          image: ghcr.io/defied/freeframe-api:latest
+          imagePullPolicy: Always
+          command:
+            - sh
+            - -c
+            - "celery -A apps.api.tasks.celery_app worker -Q email_high,email_low -c ${EMAIL_CONCURRENCY:-2} --loglevel=warning"
+          envFrom:
+            - configMapRef:
+                name: freeframe-config
+            - secretRef:
+                name: freeframe-secret
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+---
+# ─── Celery: maintenance worker (retention GC, upload reaper, orphan sweep) ─
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: freeframe-maintenance-worker
+  namespace: freeframe
+  labels:
+    app.kubernetes.io/name: freeframe-maintenance-worker
+    app.kubernetes.io/part-of: freeframe
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: freeframe-maintenance-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: freeframe-maintenance-worker
+    spec:
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+      containers:
+        - name: maintenance-worker
+          image: ghcr.io/defied/freeframe-api:latest
+          imagePullPolicy: Always
+          command:
+            - sh
+            - -c
+            - "celery -A apps.api.tasks.celery_app worker -Q maintenance -c ${MAINTENANCE_CONCURRENCY:-1} --loglevel=warning"
+          envFrom:
+            - configMapRef:
+                name: freeframe-config
+            - secretRef:
+                name: freeframe-secret
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+---
+# ─── Celery beat (scheduler) ────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: freeframe-beat
+  namespace: freeframe
+  labels:
+    app.kubernetes.io/name: freeframe-beat
+    app.kubernetes.io/part-of: freeframe
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: freeframe-beat
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: freeframe-beat
+    spec:
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+      containers:
+        - name: beat
+          image: ghcr.io/defied/freeframe-api:latest
+          imagePullPolicy: Always
+          command:
+            - sh
+            - -c
+            - "celery -A apps.api.tasks.celery_app beat --loglevel=warning -s /tmp/celerybeat-schedule"
+          envFrom:
+            - configMapRef:
+                name: freeframe-config
+            - secretRef:
+                name: freeframe-secret
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+# ─── Web (Next.js) ──────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: freeframe-web
+  namespace: freeframe
+  labels:
+    app.kubernetes.io/name: freeframe-web
+    app.kubernetes.io/part-of: freeframe
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: freeframe-web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: freeframe-web
+    spec:
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+      containers:
+        - name: web
+          image: ghcr.io/defied/freeframe-web:latest
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: freeframe-config
+          ports:
+            - containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: freeframe-web
+  namespace: freeframe
+  labels:
+    app.kubernetes.io/name: freeframe-web
+    app.kubernetes.io/part-of: freeframe
+spec:
+  type: ClusterIP
+  ports:
+    - port: 3000
+      targetPort: 3000
+  selector:
+    app.kubernetes.io/name: freeframe-web
+---
+# ─── Ingress: app (web + /api -> api, prefix stripped) ──────────────────────
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: freeframe
+  namespace: freeframe
+  labels:
+    app.kubernetes.io/name: freeframe
+    app.kubernetes.io/part-of: freeframe
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - ff.chubbyoctopus.studio
+      secretName: freeframe-tls
+  rules:
+    - host: ff.chubbyoctopus.studio
+      http:
+        paths:
+          - path: /api(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: freeframe-api
+                port:
+                  number: 8000
+          - path: /()(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: freeframe-web
+                port:
+                  number: 3000
+---
+# ─── Ingress: object storage (presigned URLs are handed to the browser, so ──
+# MinIO must be reachable directly from outside the cluster) ────────────────
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: freeframe-storage
+  namespace: freeframe
+  labels:
+    app.kubernetes.io/name: freeframe-storage
+    app.kubernetes.io/part-of: freeframe
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - storage.ff.chubbyoctopus.studio
+      secretName: freeframe-storage-tls
+  rules:
+    - host: storage.ff.chubbyoctopus.studio
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: freeframe-minio
+                port:
+                  number: 9000
